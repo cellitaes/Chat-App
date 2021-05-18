@@ -1,7 +1,8 @@
 import socket
 import threading
+import time
 import tkinter
-from tkinter import messagebox
+from tkinter import messagebox, simpledialog
 import tkinter.scrolledtext
 
 HOST = 'localhost'
@@ -27,6 +28,7 @@ class Client:
         self.input_login.grid(row=0, column=1)
         self.login_button = tkinter.Button(self.login, text="Confirm chosen nickname", command=self.confirm_login)
         self.login_button.grid(row=1, column=1, pady=5, padx=5)
+        self.login.bind('<Return>', self.confirm_login)
         self.login.mainloop()
 
     def gui_loop(self):
@@ -62,7 +64,7 @@ class Client:
         self.input_area.grid(row=3, column=0, padx=20, pady=5)
 
         self.send_button = tkinter.Button(self.win, text="Send", command=self.write)
-        self.send_button.bind("<Return>", self.write)
+        # self.win.bind("<Return>", self.write)
         self.send_button.config(font=("Arial", 12))
         self.send_button.grid(row=4, column=0, padx=20, pady=5)
 
@@ -85,23 +87,31 @@ class Client:
             self.online_list.yview('end')
             self.online_list.config(state='disabled')
 
-    def confirm_login(self):
+    def confirm_login(self, event=None):
         login = self.input_login.get('1.0', 'end')
         login = login[0:str(login).find("\n")]
         if login == "":
             messagebox.showerror("Error", "Invalid username, input field cannot be empty")
         else:
-            self.nickname = login
-            nicknames.append(self.nickname)
-            self.sock.connect((HOST, PORT))
+            if login == "admin":
+                self.password = simpledialog.askstring('Input password', 'Please input the password for admin')
+                if self.password is None:
+                    self.password = "defaultPASS"
 
-            gui_thread = threading.Thread(target=self.gui_loop)
-            receive_thread = threading.Thread(target=self.receive)
+            self.start_chatting(login)
 
-            gui_thread.start()
-            receive_thread.start()
+    def start_chatting(self, login):
+        self.nickname = login
+        nicknames.append(self.nickname)
+        self.sock.connect((HOST, PORT))
 
-            self.login.destroy()
+        gui_thread = threading.Thread(target=self.gui_loop)
+        receive_thread = threading.Thread(target=self.receive)
+
+        gui_thread.start()
+        receive_thread.start()
+
+        self.login.destroy()
 
     def receive(self):
         """Handles receiving of messages."""
@@ -111,12 +121,26 @@ class Client:
                 if message == "NICK":
                     print(self.nickname)
                     self.sock.send(self.nickname.encode('utf-8'))
+                    next_message = self.sock.recv(1024).decode('utf-8')
+
+                    if next_message == "PASS":
+                        self.sock.send(self.password.encode('utf-8'))
+                        if self.sock.recv(1024).decode('utf-8') == 'REFUSE':
+                            print('Connection was refused! Wrong password')
+                            time.sleep(0.1)
+                            self.on_closing()
+
+                    elif next_message == 'BAN':
+                        time.sleep(0.1)
+                        self.on_closing()
+
                 elif message.startswith('UPDATE'):
                     if message[len('UPDATE '):].startswith("JOIN"):
                         nicknames.append(message[len('UPDATE JOIN '):])
                     elif message[len('UPDATE '):].startswith("LEFT"):
                         nicknames.remove(message[len('UPDATE LEFT '):])
                     self.updateUsers(nicknames)
+
                 else:
                     if self.gui_done:
                         self.text_area.config(state='normal')
@@ -130,18 +154,25 @@ class Client:
                 self.sock.close()
                 break
 
-    def write(self):
+    def write(self, event=None):
         """Handles sending of messages."""
         if self.input_area.get('1.0', 'end') != "\n":
             message = f"{self.nickname}: {self.input_area.get('1.0', 'end')}"
-            self.sock.send(message.encode('utf-8'))
+            if message[len(self.nickname) + 2:].startswith("/"):
+                if self.nickname == 'admin':
+                    if message[len(self.nickname) + 2:].startswith('/kick'):
+                        self.sock.send(f"KICK {message[len(self.nickname) + 2 + 6:]}".encode('utf-8'))
+                    elif message[len(self.nickname) + 2:].startswith('/ban'):
+                        self.sock.send(f"BAN {message[len(self.nickname) + 2 + 5:]}".encode('utf-8'))
+            else:
+                self.sock.send(message.encode('utf-8'))
             self.input_area.delete('1.0', 'end')
 
     def on_closing(self):
         """This function is to be called when the window is closed."""
         self.running = False
-        self.win.destroy()
         self.sock.close()
+        self.win.destroy()
 
 
 client = Client(HOST, PORT)
